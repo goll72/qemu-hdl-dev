@@ -32,11 +32,15 @@ typedef struct KBDState {
     uint8_t cbdata;
     uint8_t pending_tmp;
 
-    PS2KbdState ps2kbd;
-    HDLPS2State hdl_ps2kbd;
+    union {
+       PS2KbdState ps2kbd;
+       HDLPS2State hdl_ps2kbd;
+    };
 
-    PS2MouseState ps2mouse;
-    HDLPS2State hdl_ps2mouse;
+    union {
+        PS2MouseState ps2mouse;
+        HDLPS2State hdl_ps2mouse;
+    };
 
     QEMUTimer *throttle_timer;
 
