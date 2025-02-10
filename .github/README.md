@@ -19,7 +19,7 @@ similar to the following:
 ```sh
 c++ -std=c++20 -fPIC -shared \
     -I ${VERILATOR_ROOT}/include -I ${VERILATOR_ROOT}/include/vltstd \
-    -I ${HDL_DEV_ROOT}/include -I . \
+    -I ${HDL_DEV_ROOT}/client/include -I . \
     -DTOP=V${TOP} -DTOP_HEADER=\"${OBJDIR}/V${TOP}.h\" \
     ${OBJDIR}/verilated.o \
     ${OBJDIR}/verilated_threads.o \
@@ -103,12 +103,12 @@ The implementation is split in two parts:
 
   - The "client" code, comprised of the simulation itself and the
     C++ files in the `client` directory, which must export the
-    functions defined and documented in `client/include/hdl-dev/verilated.h`.
+    functions defined and documented in `hdl-dev/verilated.h`.
 
     There is a protocol-specific symbol that must be exported, which
     is checked by the QEMU code to prevent accidental loading of a
     library for a device using a different protocol. The names of
-    these symbols are listed in `qemu-hdl-dev-common.h`.
+    these symbols are listed in `hdl-dev/common.h`.
 
     If you want to instantiate multiple HDL devices at once, you
     should make sure they share the same `VerilatedContext`, since
