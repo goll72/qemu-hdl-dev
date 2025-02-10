@@ -24,17 +24,25 @@
 
 #include "qemu/osdep.h"
 #include "qemu/log.h"
+#include "qemu/hdl-dev.h"
 #include "hw/irq.h"
 #include "hw/sysbus.h"
+#include "hw/qdev-core.h"
+#include "hw/misc/hdl_dev.h"
 #include "hw/input/ps2.h"
+#include "hw/qdev-properties.h"
 #include "migration/vmstate.h"
 #include "ui/console.h"
 #include "ui/input.h"
 #include "system/reset.h"
 #include "system/runstate.h"
+
 #include "qapi/error.h"
+#include "qom/object.h"
 
 #include "trace.h"
+
+#include <dlfcn.h>
 
 /* Keyboard Commands */
 #define KBD_CMD_SET_LEDS        0xED    /* Set keyboard leds */
@@ -680,6 +688,35 @@ void ps2_write_keyboard(PS2KbdState *s, int val)
     }
 }
 
+enum {
+    STATE_IDLE,
+    STATE_RTS,
+    STATE_RTS_WAIT,
+    STATE_SENDING,
+    STATE_RECEIVING,
+    STATE_WAIT_RESPONSE,
+    STATE_WAIT_NEXT_CHUNK
+};
+
+void hdl_ps2_write(HDLPS2State *s, int val)
+{
+    // XXX
+    if (s->cur_state == STATE_RTS || s->cur_state == STATE_RTS_WAIT || s->cur_state == STATE_SENDING)
+    {
+
+    }
+
+    s->cur_state = STATE_RTS;
+
+    // Payload
+    s->host_bits = val;
+
+    // Parity bit
+    s->host_bits |= (__builtin_popcount(val) % 2) << 9;
+
+    s->host_bits_sent = 0;
+}
+
 /*
  * Set the scancode translation mode.
  * 0 = raw scancodes.
@@ -1292,6 +1329,246 @@ static const TypeInfo ps2_mouse_info = {
     .class_init    = ps2_mouse_class_init
 };
 
+static void hdl_ps2_init(Object *obj)
+{
+}
+
+// Each time this function is called, it will run for `interval` ns,
+// keeping the QEMU time and the HDL simulation time synchronized.
+// It must handle host -> device message requests as well as
+// device -> host messages and it must be reentrant.
+static void hdl_ps2_timeout(void *opaque, uint64_t sim_time_to_ns)
+{
+    HDLPS2State *s = HDL_PS2_DEVICE(opaque);
+    PS2State *ps = PS2_DEVICE(s);
+
+    uint8_t clk = GET_VALUE_INOUT_HI_Z(*s->ports.clk);
+
+    switch (s->cur_state) {
+        case STATE_RTS:
+            // Pulse the clock line low, then wait for 100us
+            *s->ports.clk_dir = 0;
+            *s->ports.clk = 0;
+
+            s->cur_state = STATE_RTS_WAIT;
+
+            s->waited_for = 0;
+
+            break;
+        case STATE_RTS_WAIT:
+            s->waited_for++;
+
+            if (s->waited_for * sim_time_to_ns >= 100000) {
+                *s->ports.clk_dir = 1;
+                // Start bit
+                *s->ports.data_dir = 0;
+                *s->ports.data = 0;
+
+                s->waited_for = 0;
+
+                s->cur_state = STATE_SENDING;
+            }
+
+            break;
+        case STATE_SENDING:
+            switch (s->host_bits_sent) {
+                case 9:
+                    if (FALLING_EDGE(s->prev_clk, clk)) {
+                        // Stop bit
+                        *s->ports.data_dir = 1;
+                        s->host_bits_sent++;
+                    }
+
+                    break;
+                case 10:
+                    if (FALLING_EDGE(s->prev_clk, clk)) {
+                        uint8_t ack_bit = GET_VALUE_INOUT_HI_Z(*s->ports.data);
+
+                        assert(ack_bit == 0);
+
+                        // XXX: nonconforming, we should wait for up to 20ms
+                        // for a response if the request needs a response and
+                        // issue an error if no response arrives
+                        s->waited_for = 0;
+                        s->cur_state = STATE_IDLE;
+                    }
+
+                    break;
+                default:
+                    if (FALLING_EDGE(s->prev_clk, clk)) {
+                        // Send next bit
+                        *s->ports.data_dir = s->host_bits & 1;
+
+                        s->host_bits >>= 1;
+                        s->host_bits_sent++;
+                    }
+
+                    break;
+            }
+
+            break;
+        case STATE_WAIT_RESPONSE:
+            s->waited_for++;
+
+            // XXX: we don't know if the command we sent needs
+            // a response or not, so wait for 20ms always
+            if (s->waited_for * sim_time_to_ns >= 20000000) {
+                s->cur_state = STATE_IDLE;
+            } else if (FALLING_EDGE(s->prev_clk, clk)) {
+                // Receive response(?) from device
+                uint8_t start_bit = GET_VALUE_INOUT_HI_Z(*s->ports.data);
+
+                assert(start_bit == 0);
+
+                s->device_bits = 0;
+                s->device_bits_recvd = 0;
+
+                s->cur_state = STATE_RECEIVING;
+            }
+
+            break;
+        case STATE_IDLE:
+            if (FALLING_EDGE(s->prev_clk, clk)) {
+                uint8_t start_bit = GET_VALUE_INOUT_HI_Z(*s->ports.data);
+
+                assert(start_bit == 0);
+
+                s->cur_state = STATE_RECEIVING;
+            }
+
+            break;
+        case STATE_RECEIVING:
+            switch (s->device_bits_recvd) {
+                case 9:
+                    // XXX: check that parity bit is correct
+                    break;
+                case 10:
+                    if (FALLING_EDGE(s->prev_clk, clk)) {
+                        uint8_t stop_bit = GET_VALUE_INOUT_HI_Z(*s->ports.data);
+
+                        assert(stop_bit == 1);
+
+                        // XXX: nonconforming --- we don't know how many "packets"
+                        // a message sent from a device has so we will wait 200us
+                        // for them, if nothing arrives we will issue an IRQ
+                        s->waited_for = 0;
+                        s->cur_state = STATE_WAIT_NEXT_CHUNK;
+
+                        ps2_cqueue_data(&ps->queue, s->device_bits);
+                    }
+
+                    break;
+                default:
+                    // Receive next bit
+                    if (FALLING_EDGE(s->prev_clk, clk)) {
+                        if (*s->ports.data__en == 1 && *s->ports.data__out == 0)
+                            ;
+                        else
+                            s->device_bits |= 1 << s->device_bits_recvd;
+
+                        s->device_bits_recvd++;
+                    }
+
+                    break;
+            }
+
+            break;
+        case STATE_WAIT_NEXT_CHUNK:
+            s->waited_for++;
+
+            if (s->waited_for * sim_time_to_ns >= 200000) {
+                ps2_raise_irq(ps);
+
+                s->cur_state = STATE_IDLE;
+            } else if (FALLING_EDGE(s->prev_clk, clk)) {
+                uint8_t start_bit = GET_VALUE_INOUT_HI_Z(*s->ports.data);
+
+                assert(start_bit == 0);
+
+                s->device_bits = 0;
+                s->device_bits_recvd = 0;
+
+                s->cur_state = STATE_RECEIVING;
+            }
+
+            break;
+    }
+
+    s->prev_clk = clk;
+}
+
+static void hdl_ps2_realize(DeviceState *dev, Error **errp)
+{
+    HDLPS2State *s = HDL_PS2_DEVICE(dev);
+    HDLDevState *hs = &s->state;
+
+    object_initialize_child_with_props(OBJECT(s), "hdl-ps2", hs,
+                                       sizeof(HDLDevState), TYPE_HDL_DEVICE, &error_fatal,
+                                       "filename", s->filename, NULL);
+
+    qdev_realize(DEVICE(hs), NULL, &error_fatal);
+
+    HDLDevClass *hdc = HDL_DEVICE_GET_CLASS(hs);
+    void *check = dlsym(hs->dyn_handle, STR(HDL_PS2_DEVICE_SYM));
+
+    if (check == NULL) {
+        error_setg(errp, "HDL PS/2 device: symbol " STR(HDL_PS2_DEVICE_SYM) " not present in shared library");
+        return;
+    }
+
+    if (hdc->timeprecision >= -4) {
+        error_setg(errp, "HDL PS/2 device: set your timeprecision to a value smaller than 100us");
+        return;
+    }
+
+    hs->hdl_dev_init(hs->ctx, (void *)&s->ports);
+
+    s->device_bits = 0;
+    s->device_bits_recvd = 0;
+
+    s->host_bits = 0;
+    s->host_bits_sent = 0;
+
+    s->waited_for = 0;
+
+    s->prev_clk = 1;
+
+    *s->ports.clk_dir = 1;
+    *s->ports.data_dir = 1;
+
+    hs->timeout_ctx = s;
+    hs->timeout = hdl_ps2_timeout;
+}
+
+static void hdl_ps2_unrealize(DeviceState *dev)
+{
+}
+
+static const Property hdl_ps2_props[] = {
+    DEFINE_PROP_STRING("filename", HDLPS2State, filename),
+    DEFINE_PROP_BOOL("mouse", HDLPS2State, is_mouse, false)
+};
+
+static void hdl_ps2_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+
+    dc->realize = hdl_ps2_realize;
+    dc->unrealize = hdl_ps2_unrealize;
+
+    dc->desc = "HDL PS/2 Device";
+
+    device_class_set_props(dc, hdl_ps2_props);
+}
+
+static const TypeInfo hdl_ps2_info = {
+    .name          = TYPE_HDL_PS2_DEVICE,
+    .parent        = TYPE_PS2_DEVICE,
+    .instance_size = sizeof(HDLPS2State),
+    .instance_init = hdl_ps2_init,
+    .class_init    = hdl_ps2_class_init,
+};
+
 static void ps2_init(Object *obj)
 {
     PS2State *s = PS2_DEVICE(obj);
@@ -1304,6 +1581,7 @@ static void ps2_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
     ResettableClass *rc = RESETTABLE_CLASS(klass);
 
+    // XXX
     rc->phases.hold = ps2_reset_hold;
     rc->phases.exit = ps2_reset_exit;
     set_bit(DEVICE_CATEGORY_INPUT, dc->categories);
@@ -1324,6 +1602,7 @@ static void ps2_register_types(void)
     type_register_static(&ps2_info);
     type_register_static(&ps2_kbd_info);
     type_register_static(&ps2_mouse_info);
+    type_register_static(&hdl_ps2_info);
 }
 
 type_init(ps2_register_types)

@@ -82,8 +82,13 @@ IsaDma *isa_bus_get_dma(ISABus *bus, int nchan);
 qemu_irq isa_bus_get_irq(ISABus *bus, unsigned irqnum);
 ISADevice *isa_new(const char *name);
 ISADevice *isa_try_new(const char *name);
+
+ISADevice *isa_new_with_props(const char *name, Object *parent, const char *id, Error **errp, ...);
+ISADevice *isa_new_with_propv(const char *name, Object *parent, const char *id, Error **errp, va_list vargs);
+
 bool isa_realize_and_unref(ISADevice *dev, ISABus *bus, Error **errp);
 ISADevice *isa_create_simple(ISABus *bus, const char *name);
+ISADevice *isa_create_with_props(ISABus *bus, const char *name, Object *parent, const char *id, Error **errp, ...);
 
 ISADevice *isa_vga_init(ISABus *bus);
 

@@ -33,11 +33,13 @@
 #include "qemu/error-report.h"
 #include "qemu/option.h"
 #include "hw/irq.h"
+#include "hw/qdev-core.h"
 #include "hw/qdev-properties.h"
 #include "hw/boards.h"
 #include "hw/sysbus.h"
 #include "hw/qdev-clock.h"
 #include "migration/vmstate.h"
+#include "qom/object.h"
 #include "trace.h"
 
 static bool qdev_hot_added = false;
@@ -147,6 +149,22 @@ bool qdev_set_parent_bus(DeviceState *dev, BusState *bus, Error **errp)
 DeviceState *qdev_new(const char *name)
 {
     return DEVICE(object_new(name));
+}
+
+DeviceState *qdev_new_with_propv(const char *name, Object *parent, const char *id, Error **errp, va_list vargs)
+{
+    return DEVICE(object_new_with_propv(name, parent, id, errp, vargs));
+}
+
+DeviceState *qdev_new_with_props(const char *name, Object *parent, const char *id, Error **errp, ...)
+{
+    va_list vargs;
+
+    va_start(vargs, errp);
+    DeviceState *dev = DEVICE(object_new_with_propv(name, parent, id, errp, vargs));
+    va_end(vargs);
+
+    return dev;
 }
 
 DeviceState *qdev_try_new(const char *name)

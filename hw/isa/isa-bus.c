@@ -163,12 +163,46 @@ ISADevice *isa_try_new(const char *name)
     return ISA_DEVICE(qdev_try_new(name));
 }
 
+ISADevice *isa_new_with_props(const char *name, Object *parent, const char *id, Error **errp, ...)
+{
+    ISADevice *dev;
+    va_list vargs;
+
+    va_start(vargs, errp);
+
+    dev = ISA_DEVICE(qdev_new_with_propv(name, parent, id, errp, vargs));
+
+    va_end(vargs);
+
+    return dev;
+}
+
+ISADevice *isa_new_with_propv(const char *name, Object *parent, const char *id, Error **errp, va_list vargs)
+{
+    return ISA_DEVICE(qdev_new_with_propv(name, parent, id, errp, vargs));
+}
+
 ISADevice *isa_create_simple(ISABus *bus, const char *name)
 {
     ISADevice *dev;
 
     dev = isa_new(name);
     isa_realize_and_unref(dev, bus, &error_fatal);
+    return dev;
+}
+
+ISADevice *isa_create_with_props(ISABus *bus, const char *name, Object *parent, const char *id, Error **errp, ...)
+{
+    ISADevice *dev;
+    va_list vargs;
+
+    va_start(vargs, errp);
+
+    dev = isa_new_with_propv(name, parent, id, errp, vargs);
+    isa_realize_and_unref(dev, bus, &error_fatal);
+
+    va_end(vargs);
+
     return dev;
 }
 

@@ -30,10 +30,12 @@
 #include "hw/isa/isa.h"
 #include "migration/vmstate.h"
 #include "hw/acpi/acpi_aml_interface.h"
+#include "hw/sysbus.h"
 #include "hw/input/ps2.h"
 #include "hw/irq.h"
 #include "hw/input/i8042.h"
 #include "hw/qdev-properties.h"
+#include "qom/object.h"
 #include "system/reset.h"
 #include "system/runstate.h"
 
@@ -286,7 +288,10 @@ static void kbd_queue(KBDState *s, int b, int aux)
         s->pending |= aux ? KBD_PENDING_CTRL_AUX : KBD_PENDING_CTRL_KBD;
         kbd_safe_update_irq(s);
     } else {
-        ps2_queue(aux ? PS2_DEVICE(&s->ps2mouse) : PS2_DEVICE(&s->ps2kbd), b);
+        if (aux)
+            ps2_queue(s->hdl_mouse_filename ? PS2_DEVICE(&s->hdl_ps2mouse) : PS2_DEVICE(&s->ps2mouse), b);
+        else
+            ps2_queue(s->hdl_kbd_filename ? PS2_DEVICE(&s->hdl_ps2kbd) : PS2_DEVICE(&s->ps2kbd), b);
     }
 }
 
@@ -408,9 +413,16 @@ static uint64_t kbd_read_data(void *opaque, hwaddr addr,
                 timer_mod(s->throttle_timer,
                           qemu_clock_get_us(QEMU_CLOCK_VIRTUAL) + 1000);
             }
-            s->obdata = ps2_read_data(PS2_DEVICE(&s->ps2kbd));
+
+            if (s->hdl_kbd_filename)
+                s->obdata = ps2_read_data(PS2_DEVICE(&s->hdl_ps2kbd));
+            else
+                s->obdata = ps2_read_data(PS2_DEVICE(&s->ps2kbd));
         } else if (s->obsrc & KBD_OBSRC_MOUSE) {
-            s->obdata = ps2_read_data(PS2_DEVICE(&s->ps2mouse));
+            if (s->hdl_mouse_filename)
+                s->obdata = ps2_read_data(PS2_DEVICE(&s->hdl_ps2mouse));
+            else
+                s->obdata = ps2_read_data(PS2_DEVICE(&s->ps2mouse));
         } else if (s->obsrc & KBD_OBSRC_CTRL) {
             s->obdata = kbd_dequeue(s);
         }
@@ -429,13 +441,17 @@ static void kbd_write_data(void *opaque, hwaddr addr,
 
     switch (s->write_cmd) {
     case 0:
-        ps2_write_keyboard(&s->ps2kbd, val);
+        if (s->hdl_kbd_filename)
+            hdl_ps2_write(&s->hdl_ps2kbd, val);
+        else
+            ps2_write_keyboard(&s->ps2kbd, val);
         /* sending data to the keyboard reenables PS/2 communication */
         s->mode &= ~KBD_MODE_DISABLE_KBD;
         kbd_safe_update_irq(s);
         break;
     case KBD_CCMD_WRITE_MODE:
         s->mode = val;
+        // XXX
         ps2_keyboard_set_translation(&s->ps2kbd,
                                      (s->mode & KBD_MODE_KCC) != 0);
         /*
@@ -459,7 +475,10 @@ static void kbd_write_data(void *opaque, hwaddr addr,
         outport_write(s, val);
         break;
     case KBD_CCMD_WRITE_MOUSE:
-        ps2_write_mouse(&s->ps2mouse, val);
+        if (s->hdl_mouse_filename)
+            hdl_ps2_write(&s->hdl_ps2mouse, val);
+        else
+            ps2_write_mouse(&s->ps2mouse, val);
         /* sending data to the mouse reenables PS/2 communication */
         s->mode &= ~KBD_MODE_DISABLE_MOUSE;
         kbd_safe_update_irq(s);
@@ -700,19 +719,45 @@ static void i8042_mmio_realize(DeviceState *dev, Error **errp)
 
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->region);
 
-    if (!sysbus_realize(SYS_BUS_DEVICE(&ks->ps2kbd), errp)) {
+    if (ks->hdl_kbd_filename) {
+        object_initialize_child_with_props(OBJECT(dev), "ps2kbd", &ks->hdl_ps2kbd,
+                                           sizeof(HDLPS2State), TYPE_HDL_PS2_DEVICE, errp,
+                                           "filename", ks->hdl_kbd_filename,
+                                           "mouse", "false", NULL);
+    } else {
+        object_initialize_child(OBJECT(dev), "ps2kbd", &ks->ps2kbd, TYPE_PS2_KBD_DEVICE);
+    }
+
+    if (ks->hdl_mouse_filename) {
+        object_initialize_child_with_props(OBJECT(dev), "ps2mouse", &ks->hdl_ps2mouse,
+                                           sizeof(HDLPS2State), TYPE_HDL_PS2_DEVICE, errp,
+                                           "filename", ks->hdl_mouse_filename,
+                                           "mouse", "true", NULL);
+    } else {
+        object_initialize_child(OBJECT(dev), "ps2mouse", &ks->ps2mouse, TYPE_PS2_MOUSE_DEVICE);
+    }
+
+    DeviceState *kbd = ks->hdl_kbd_filename
+                           ? DEVICE(&ks->hdl_ps2kbd)
+                           : DEVICE(&ks->ps2kbd);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(kbd), errp)) {
         return;
     }
 
-    if (!sysbus_realize(SYS_BUS_DEVICE(&ks->ps2mouse), errp)) {
+    DeviceState *mouse = ks->hdl_mouse_filename
+                             ? DEVICE(&ks->hdl_ps2mouse)
+                             : DEVICE(&ks->ps2mouse);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(mouse), errp)) {
         return;
     }
 
-    qdev_connect_gpio_out(DEVICE(&ks->ps2kbd), PS2_DEVICE_IRQ,
+    qdev_connect_gpio_out(kbd, PS2_DEVICE_IRQ,
                           qdev_get_gpio_in_named(dev, "ps2-kbd-input-irq",
                                                  0));
 
-    qdev_connect_gpio_out(DEVICE(&ks->ps2mouse), PS2_DEVICE_IRQ,
+    qdev_connect_gpio_out(mouse, PS2_DEVICE_IRQ,
                           qdev_get_gpio_in_named(dev, "ps2-mouse-input-irq",
                                                  0));
 }
@@ -724,10 +769,6 @@ static void i8042_mmio_init(Object *obj)
 
     ks->extended_state = true;
 
-    object_initialize_child(obj, "ps2kbd", &ks->ps2kbd, TYPE_PS2_KBD_DEVICE);
-    object_initialize_child(obj, "ps2mouse", &ks->ps2mouse,
-                            TYPE_PS2_MOUSE_DEVICE);
-
     qdev_init_gpio_out(DEVICE(obj), ks->irqs, 2);
     qdev_init_gpio_in_named(DEVICE(obj), i8042_mmio_set_kbd_irq,
                             "ps2-kbd-input-irq", 1);
@@ -738,6 +779,8 @@ static void i8042_mmio_init(Object *obj)
 static const Property i8042_mmio_properties[] = {
     DEFINE_PROP_UINT64("mask", MMIOKBDState, kbd.mask, UINT64_MAX),
     DEFINE_PROP_UINT32("size", MMIOKBDState, size, -1),
+    DEFINE_PROP_STRING("hdl-kbd", MMIOKBDState, kbd.hdl_kbd_filename),
+    DEFINE_PROP_STRING("hdl-mouse", MMIOKBDState, kbd.hdl_mouse_filename)
 };
 
 static const VMStateDescription vmstate_kbd_mmio = {
@@ -841,10 +884,6 @@ static void i8042_initfn(Object *obj)
     memory_region_init_io(isa_s->io + 1, obj, &i8042_cmd_ops, s,
                           "i8042-cmd", 1);
 
-    object_initialize_child(obj, "ps2kbd", &s->ps2kbd, TYPE_PS2_KBD_DEVICE);
-    object_initialize_child(obj, "ps2mouse", &s->ps2mouse,
-                            TYPE_PS2_MOUSE_DEVICE);
-
     qdev_init_gpio_out_named(DEVICE(obj), &s->a20_out, I8042_A20_LINE, 1);
 
     qdev_init_gpio_out(DEVICE(obj), s->irqs, 2);
@@ -872,25 +911,51 @@ static void i8042_realizefn(DeviceState *dev, Error **errp)
         return;
     }
 
+    if (s->hdl_kbd_filename) {
+        object_initialize_child_with_props(OBJECT(dev), "ps2kbd", &s->hdl_ps2kbd,
+                                           sizeof(HDLPS2State), TYPE_HDL_PS2_DEVICE, errp,
+                                           "filename", s->hdl_kbd_filename,
+                                           "mouse", "false", NULL);
+    } else {
+        object_initialize_child(OBJECT(dev), "ps2kbd", &s->ps2kbd, TYPE_PS2_KBD_DEVICE);
+    }
+
+    if (s->hdl_mouse_filename) {
+        object_initialize_child_with_props(OBJECT(dev), "ps2mouse", &s->hdl_ps2mouse,
+                                           sizeof(HDLPS2State), TYPE_HDL_PS2_DEVICE, errp,
+                                           "filename", s->hdl_mouse_filename,
+                                           "mouse", "true", NULL);
+    } else {
+        object_initialize_child(OBJECT(dev), "ps2mouse", &s->ps2mouse, TYPE_PS2_MOUSE_DEVICE);
+    }
+
     isa_connect_gpio_out(isadev, I8042_KBD_IRQ, isa_s->kbd_irq);
     isa_connect_gpio_out(isadev, I8042_MOUSE_IRQ, isa_s->mouse_irq);
 
     isa_register_ioport(isadev, isa_s->io + 0, 0x60);
     isa_register_ioport(isadev, isa_s->io + 1, 0x64);
 
-    if (!sysbus_realize(SYS_BUS_DEVICE(&s->ps2kbd), errp)) {
+    DeviceState *kbd = s->hdl_kbd_filename
+                          ? DEVICE(&s->hdl_ps2kbd)
+                          : DEVICE(&s->ps2kbd);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(kbd), errp)) {
         return;
     }
 
-    qdev_connect_gpio_out(DEVICE(&s->ps2kbd), PS2_DEVICE_IRQ,
+    qdev_connect_gpio_out(kbd, PS2_DEVICE_IRQ,
                           qdev_get_gpio_in_named(dev, "ps2-kbd-input-irq",
                                                  0));
 
-    if (!sysbus_realize(SYS_BUS_DEVICE(&s->ps2mouse), errp)) {
+    DeviceState *mouse = s->hdl_mouse_filename
+                            ? DEVICE(&s->hdl_ps2mouse)
+                            : DEVICE(&s->ps2mouse);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(mouse), errp)) {
         return;
     }
 
-    qdev_connect_gpio_out(DEVICE(&s->ps2mouse), PS2_DEVICE_IRQ,
+    qdev_connect_gpio_out(mouse, PS2_DEVICE_IRQ,
                           qdev_get_gpio_in_named(dev, "ps2-mouse-input-irq",
                                                  0));
 
@@ -937,6 +1002,8 @@ static const Property i8042_properties[] = {
     DEFINE_PROP_BOOL("kbd-throttle", ISAKBDState, kbd_throttle, false),
     DEFINE_PROP_UINT8("kbd-irq", ISAKBDState, kbd_irq, 1),
     DEFINE_PROP_UINT8("mouse-irq", ISAKBDState, mouse_irq, 12),
+    DEFINE_PROP_STRING("hdl-kbd", ISAKBDState, kbd.hdl_kbd_filename),
+    DEFINE_PROP_STRING("hdl-mouse", ISAKBDState, kbd.hdl_mouse_filename)
 };
 
 static void i8042_class_initfn(ObjectClass *klass, void *data)

@@ -220,4 +220,8 @@ config IOSB
 config XLNX_VERSAL_TRNG
     bool
 
+config HDL_DEV
+    bool
+    default y
+
 source macio/Kconfig

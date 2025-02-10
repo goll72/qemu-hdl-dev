@@ -26,6 +26,9 @@
 #define HW_PS2_H
 
 #include "hw/sysbus.h"
+#include "hw/misc/hdl_dev.h"
+
+#include "qemu/hdl-dev.h"
 
 #define PS2_MOUSE_BUTTON_LEFT   0x01
 #define PS2_MOUSE_BUTTON_RIGHT  0x02
@@ -97,9 +100,36 @@ struct PS2MouseState {
 #define TYPE_PS2_MOUSE_DEVICE "ps2-mouse"
 OBJECT_DECLARE_SIMPLE_TYPE(PS2MouseState, PS2_MOUSE_DEVICE)
 
+struct HDLPS2State {
+    PS2State parent_obj;
+    HDLDevState state;
+
+    char *filename;
+
+    uint16_t device_bits;
+    uint16_t host_bits;
+
+    uint8_t host_bits_sent;
+    uint8_t device_bits_recvd;
+
+    uint8_t cur_state;
+    uint8_t prev_clk;
+
+    bool is_mouse;
+
+    // For how long we've waited, in simulation time units
+    int waited_for;
+
+    const struct HDLPS2Ports ports;
+};
+
+#define TYPE_HDL_PS2_DEVICE "hdl-ps2"
+OBJECT_DECLARE_SIMPLE_TYPE(HDLPS2State, HDL_PS2_DEVICE)
+
 /* ps2.c */
 void ps2_write_mouse(PS2MouseState *s, int val);
 void ps2_write_keyboard(PS2KbdState *s, int val);
+void hdl_ps2_write(HDLPS2State *s, int val);
 uint32_t ps2_read_data(PS2State *s);
 void ps2_queue_noirq(PS2State *s, int b);
 void ps2_queue(PS2State *s, int b);

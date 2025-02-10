@@ -30,6 +30,7 @@
 #include "hw/hyperv/hv-balloon.h"
 #include "hw/i386/fw_cfg.h"
 #include "hw/i386/vmport.h"
+#include "qom/object.h"
 #include "system/cpus.h"
 #include "hw/ide/ide-bus.h"
 #include "hw/timer/hpet.h"
@@ -1086,7 +1087,7 @@ static const MemoryRegionOps ioportF0_io_ops = {
     },
 };
 
-static void pc_superio_init(ISABus *isa_bus, bool create_fdctrl,
+static void pc_superio_init(PCMachineState *pcms, ISABus *isa_bus, bool create_fdctrl,
                             bool create_i8042, bool no_vmport, Error **errp)
 {
     int i;
@@ -1119,7 +1120,19 @@ static void pc_superio_init(ISABus *isa_bus, bool create_fdctrl,
         return;
     }
 
-    i8042 = isa_create_simple(isa_bus, TYPE_I8042);
+    if (pcms->hdl_kbd_filename && pcms->hdl_mouse_filename) {
+        i8042 = isa_create_with_props(isa_bus, TYPE_I8042, OBJECT(isa_bus), "i8042", errp,
+                                      "hdl-kbd", pcms->hdl_kbd_filename, "hdl-mouse", pcms->hdl_mouse_filename, NULL);
+    } else if (pcms->hdl_kbd_filename) {
+        i8042 = isa_create_with_props(isa_bus, TYPE_I8042, OBJECT(isa_bus), "i8042", errp,
+                                      "hdl-kbd", pcms->hdl_kbd_filename, NULL);
+    } else if (pcms->hdl_mouse_filename) {
+        i8042 = isa_create_with_props(isa_bus, TYPE_I8042, OBJECT(isa_bus), "i8042", errp,
+                                      "hdl-mouse", pcms->hdl_mouse_filename, NULL);
+    } else {
+        i8042 = isa_create_with_props(isa_bus, TYPE_I8042, OBJECT(isa_bus), "i8042", errp, NULL);
+    }
+
     if (!no_vmport) {
         isa_create_simple(isa_bus, TYPE_VMPORT);
         vmmouse = isa_try_new("vmmouse");
@@ -1239,7 +1252,7 @@ void pc_basic_device_init(struct PCMachineState *pcms,
     }
 
     /* Super I/O */
-    pc_superio_init(isa_bus, create_fdctrl, pcms->i8042_enabled,
+    pc_superio_init(pcms, isa_bus, create_fdctrl, pcms->i8042_enabled,
                     pcms->vmport != ON_OFF_AUTO_ON, &error_fatal);
 }
 
@@ -1572,6 +1585,35 @@ static void pc_machine_set_i8042(Object *obj, bool value, Error **errp)
     pcms->i8042_enabled = value;
 }
 
+static char *pc_machine_get_hdl_kbd(Object *obj, Error **errp)
+{
+    PCMachineState *pcms = PC_MACHINE(obj);
+
+    return pcms->hdl_kbd_filename;
+}
+
+static void pc_machine_set_hdl_kbd(Object *obj, const char *value, Error **errp)
+{
+    PCMachineState *pcms = PC_MACHINE(obj);
+
+    pcms->hdl_kbd_filename = strdup(value);
+}
+
+
+static char *pc_machine_get_hdl_mouse(Object *obj, Error **errp)
+{
+    PCMachineState *pcms = PC_MACHINE(obj);
+
+    return (char *)pcms->hdl_mouse_filename;
+}
+
+static void pc_machine_set_hdl_mouse(Object *obj, const char *value, Error **errp)
+{
+    PCMachineState *pcms = PC_MACHINE(obj);
+
+    pcms->hdl_mouse_filename = strdup(value);
+}
+
 static bool pc_machine_get_default_bus_bypass_iommu(Object *obj, Error **errp)
 {
     PCMachineState *pcms = PC_MACHINE(obj);
@@ -1832,6 +1874,16 @@ static void pc_machine_class_init(ObjectClass *oc, void *data)
         pc_machine_get_i8042, pc_machine_set_i8042);
     object_class_property_set_description(oc, PC_MACHINE_I8042,
         "Enable/disable Intel 8042 PS/2 controller emulation");
+
+    object_class_property_add_str(oc, "hdl-kbd",
+        pc_machine_get_hdl_kbd, pc_machine_set_hdl_kbd);
+    object_class_property_set_description(oc, "hdl-kbd",
+        "Set the filename of the HDL PS/2 keyboard device");
+
+    object_class_property_add_str(oc, "hdl-mouse",
+        pc_machine_get_hdl_mouse, pc_machine_set_hdl_mouse);
+    object_class_property_set_description(oc, "hdl-mouse",
+        "Set the filename of the HDL PS/2 mouse device");
 
     object_class_property_add_bool(oc, "default-bus-bypass-iommu",
         pc_machine_get_default_bus_bypass_iommu,

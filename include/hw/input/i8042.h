@@ -31,13 +31,21 @@ typedef struct KBDState {
     uint8_t obdata;
     uint8_t cbdata;
     uint8_t pending_tmp;
+
     PS2KbdState ps2kbd;
+    HDLPS2State hdl_ps2kbd;
+
     PS2MouseState ps2mouse;
+    HDLPS2State hdl_ps2mouse;
+
     QEMUTimer *throttle_timer;
 
     qemu_irq irqs[2];
     qemu_irq a20_out;
     hwaddr mask;
+
+    char *hdl_kbd_filename;
+    char *hdl_mouse_filename;
 } KBDState;
 
 /*

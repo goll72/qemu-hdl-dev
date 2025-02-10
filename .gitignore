@@ -6,6 +6,8 @@
 .sdk
 .stgit-*
 .git-submodule-status
+.clangd
+compile_commands.json
 .clang-format
 .gdb_history
 cscope.*

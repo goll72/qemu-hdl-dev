@@ -457,6 +457,10 @@ DeviceState *qdev_new(const char *name);
  */
 DeviceState *qdev_try_new(const char *name);
 
+DeviceState *qdev_new_with_propv(const char *name, Object *parent, const char *id, Error **errp, va_list vargs);
+
+DeviceState *qdev_new_with_props(const char *name, Object *parent, const char *id, Error **errp, ...);
+
 /**
  * qdev_is_realized() - check if device is realized
  * @dev: The device to check.
