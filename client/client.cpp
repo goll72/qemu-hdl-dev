@@ -4,6 +4,16 @@
 
 #include "hdl-dev/verilated.h"
 
+#ifndef PROTO
+#error "Define PROTO to the protocol being used"
+#endif
+
+#define CONCAT2_(x, y) x ## y
+#define CONCAT2(x, y) CONCAT2_(x, y)
+
+#define CONCAT3_(x, y, z) x ## y ## z
+#define CONCAT3(x, y, z) CONCAT3_(x, y, z)
+
 extern "C" {
 
 static uint64_t _time = 0;
@@ -17,12 +27,11 @@ void *hdl_dev_new(void)
 void hdl_dev_init(void *top_, void *ports_)
 {
     TOP *top = static_cast<TOP *>(top_);
-    HDLPS2Ports *ports = static_cast<HDLPS2Ports *>(ports_);
+    CONCAT3(HDL, PROTO, Ports) *ports = static_cast<CONCAT3(HDL, PROTO, Ports) *>(ports_);
 
 #define X(T, x) ports->x = &top->x
 
-    INOUT(_, clk);
-    INOUT(_, data);
+    CONCAT2(PROTO, _PORTS)
 
 #undef X
 }
@@ -69,6 +78,6 @@ void hdl_dev_free(void *top_)
     delete top;
 }
 
-int HDL_PS2_DEVICE_SYM;
+int CONCAT3(HDL_, PROTO, _DEVICE_SYM);
 
 }

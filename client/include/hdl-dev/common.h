@@ -9,12 +9,20 @@
 #define STR(x) STR_(x)
 #define STR_(x) #x
 
-#define GET_VALUE_INOUT_HI_Z(x) \
-    x##_dir == 0                \
-        ? x                     \
-        : x##__en == 1          \
-            ? x##__out          \
-            : 1
+/* Get value of an inout port with wired-or resolution */
+#define GET_VALUE_INOUT_WOR(x) \
+    ((x##__en & x##__out) | x)
+
+#define GET_VALUE_INOUT_LO_Z(x) GET_VALUE_INOUT_WOR(x)
+
+/* Get value of an inout port with wired-and resolution */
+#define GET_VALUE_INOUT_WAND(x) \
+    ((~x##__en | x##__out) & x)
+
+#define GET_VALUE_INOUT_HI_Z(x) GET_VALUE_INOUT_WAND(x)
+
+#define RISING_EDGE(prev, x) \
+    (prev == 0 && x == 1)
 
 #define FALLING_EDGE(prev, x) \
     (prev == 1 && x == 0)
@@ -23,7 +31,6 @@
 #define OUT(T, x) X(T, x)
 #define INOUT(T, x) \
     X(T, x);        \
-    X(T, x##_dir);  \
     X(T, x##__en);  \
     X(T, x##__out)
 
@@ -36,20 +43,25 @@ extern "C" {
 
 #define X(T, x) T *x
 
+#define PS2_PORTS         \
+    INOUT(uint8_t, clk);  \
+    INOUT(uint8_t, data);
 
 struct HDLPS2Ports {
-    INOUT(uint8_t, clk);
-    INOUT(uint8_t, data);
+    PS2_PORTS
 };
 
 #define HDL_PS2_DEVICE_SYM hdl_ps2_dev
 
 
-struct HDLUSBPorts {
-    // D+
-    INOUT(uint8_t, d_p);
-    // D-
+#define USB_PORTS         \
+    /* D+ */              \
+    INOUT(uint8_t, d_p);  \
+    /* D- */              \
     INOUT(uint8_t, d_m);
+
+struct HDLUSBPorts {
+    USB_PORTS
 };
 
 #define HDL_USB_DEVICE_SYM hdl_usb_dev

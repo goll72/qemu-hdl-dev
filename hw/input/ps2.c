@@ -1347,7 +1347,6 @@ static void hdl_ps2_timeout(void *opaque, uint64_t sim_time_to_ns)
     switch (s->cur_state) {
         case STATE_RTS:
             // Pulse the clock line low, then wait for 100us
-            *s->ports.clk_dir = 0;
             *s->ports.clk = 0;
 
             s->cur_state = STATE_RTS_WAIT;
@@ -1359,9 +1358,8 @@ static void hdl_ps2_timeout(void *opaque, uint64_t sim_time_to_ns)
             s->waited_for++;
 
             if (s->waited_for * sim_time_to_ns >= 100000) {
-                *s->ports.clk_dir = 1;
+                *s->ports.clk = 1;
                 // Start bit
-                *s->ports.data_dir = 0;
                 *s->ports.data = 0;
 
                 s->waited_for = 0;
@@ -1375,7 +1373,7 @@ static void hdl_ps2_timeout(void *opaque, uint64_t sim_time_to_ns)
                 case 9:
                     if (FALLING_EDGE(s->prev_clk, clk)) {
                         // Stop bit
-                        *s->ports.data_dir = 1;
+                        *s->ports.data = 1;
                         s->host_bits_sent++;
                     }
 
@@ -1397,7 +1395,7 @@ static void hdl_ps2_timeout(void *opaque, uint64_t sim_time_to_ns)
                 default:
                     if (FALLING_EDGE(s->prev_clk, clk)) {
                         // Send next bit
-                        *s->ports.data_dir = s->host_bits & 1;
+                        *s->ports.data = s->host_bits & 1;
 
                         s->host_bits >>= 1;
                         s->host_bits_sent++;
@@ -1533,8 +1531,8 @@ static void hdl_ps2_realize(DeviceState *dev, Error **errp)
 
     s->prev_clk = 1;
 
-    *s->ports.clk_dir = 1;
-    *s->ports.data_dir = 1;
+    *s->ports.clk = 1;
+    *s->ports.data = 1;
 
     hs->timeout_ctx = s;
     hs->timeout = hdl_ps2_timeout;
