@@ -156,4 +156,4 @@ system_ss.add(when: 'CONFIG_SBSA_REF', if_true: files('sbsa_ec.c'))
 system_ss.add(when: 'CONFIG_LASI', if_true: files('lasi.c'))
 
 # HDL devices
-system_ss.add(when: 'CONFIG_HDL_DEV', if_true: files('hdl_dev.c'))
+system_ss.add(when: 'CONFIG_HDL', if_true: files('hdl_dev.c'))

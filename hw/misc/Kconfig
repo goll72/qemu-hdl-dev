@@ -220,7 +220,7 @@ config IOSB
 config XLNX_VERSAL_TRNG
     bool
 
-config HDL_DEV
+config HDL
     bool
     default y
 

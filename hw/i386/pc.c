@@ -1120,6 +1120,7 @@ static void pc_superio_init(PCMachineState *pcms, ISABus *isa_bus, bool create_f
         return;
     }
 
+#ifdef CONFIG_HDL
     if (pcms->hdl_kbd_filename && pcms->hdl_mouse_filename) {
         i8042 = isa_create_with_props(isa_bus, TYPE_I8042, OBJECT(isa_bus), "i8042", errp,
                                       "hdl-kbd", pcms->hdl_kbd_filename, "hdl-mouse", pcms->hdl_mouse_filename, NULL);
@@ -1129,9 +1130,9 @@ static void pc_superio_init(PCMachineState *pcms, ISABus *isa_bus, bool create_f
     } else if (pcms->hdl_mouse_filename) {
         i8042 = isa_create_with_props(isa_bus, TYPE_I8042, OBJECT(isa_bus), "i8042", errp,
                                       "hdl-mouse", pcms->hdl_mouse_filename, NULL);
-    } else {
+    } else
+#endif
         i8042 = isa_create_with_props(isa_bus, TYPE_I8042, OBJECT(isa_bus), "i8042", errp, NULL);
-    }
 
     if (!no_vmport) {
         isa_create_simple(isa_bus, TYPE_VMPORT);
@@ -1585,6 +1586,7 @@ static void pc_machine_set_i8042(Object *obj, bool value, Error **errp)
     pcms->i8042_enabled = value;
 }
 
+#ifdef CONFIG_HDL
 static char *pc_machine_get_hdl_kbd(Object *obj, Error **errp)
 {
     PCMachineState *pcms = PC_MACHINE(obj);
@@ -1613,6 +1615,7 @@ static void pc_machine_set_hdl_mouse(Object *obj, const char *value, Error **err
 
     pcms->hdl_mouse_filename = strdup(value);
 }
+#endif
 
 static bool pc_machine_get_default_bus_bypass_iommu(Object *obj, Error **errp)
 {
@@ -1875,6 +1878,7 @@ static void pc_machine_class_init(ObjectClass *oc, void *data)
     object_class_property_set_description(oc, PC_MACHINE_I8042,
         "Enable/disable Intel 8042 PS/2 controller emulation");
 
+#ifdef CONFIG_HDL
     object_class_property_add_str(oc, "hdl-kbd",
         pc_machine_get_hdl_kbd, pc_machine_set_hdl_kbd);
     object_class_property_set_description(oc, "hdl-kbd",
@@ -1884,6 +1888,7 @@ static void pc_machine_class_init(ObjectClass *oc, void *data)
         pc_machine_get_hdl_mouse, pc_machine_set_hdl_mouse);
     object_class_property_set_description(oc, "hdl-mouse",
         "Set the filename of the HDL PS/2 mouse device");
+#endif
 
     object_class_property_add_bool(oc, "default-bus-bypass-iommu",
         pc_machine_get_default_bus_bypass_iommu,
